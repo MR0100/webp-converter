@@ -1,0 +1,15 @@
+node_modules/
+dist/
+
+# Rust / Tauri build output
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor / log
+*.log
+.vscode/
+.idea/

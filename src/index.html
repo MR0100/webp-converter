@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WebP Converter</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>WebP Converter</h1>
+        <p class="sub">Bulk-convert images to WebP. PNGs stay lossless to preserve transparency; everything else uses the quality slider.</p>
+      </header>
+
+      <section class="card">
+        <div class="row">
+          <label>Input folder</label>
+          <div class="path-row">
+            <input id="input-dir" type="text" placeholder="Pick a folder containing your images…" readonly />
+            <button id="pick-input" class="secondary">Browse…</button>
+          </div>
+        </div>
+
+        <div class="row">
+          <label>Output folder</label>
+          <div class="path-row">
+            <input id="output-dir" type="text" placeholder="Pick where the .webp files should go…" readonly />
+            <button id="pick-output" class="secondary">Browse…</button>
+          </div>
+        </div>
+
+        <div class="row split">
+          <div>
+            <label for="quality">Quality <span id="quality-val">80</span></label>
+            <input id="quality" type="range" min="0" max="100" value="80" />
+            <p class="hint">80 is the sweet spot for web photos. PNGs ignore this and use lossless.</p>
+          </div>
+          <div>
+            <label for="parallel">Parallel jobs</label>
+            <input id="parallel" type="number" min="1" max="32" value="4" />
+            <p class="hint">4 is safe; bump to 8 on a fast machine.</p>
+          </div>
+        </div>
+
+        <div class="row toggles">
+          <label class="checkbox">
+            <input id="recursive" type="checkbox" checked />
+            <span>Include subfolders</span>
+          </label>
+          <label class="checkbox">
+            <input id="skip-existing" type="checkbox" checked />
+            <span>Skip files already converted</span>
+          </label>
+          <label class="checkbox">
+            <input id="lossless-png" type="checkbox" checked />
+            <span>Auto-lossless for PNG (recommended)</span>
+          </label>
+        </div>
+
+        <div class="actions">
+          <button id="convert-btn" class="primary" disabled>Convert</button>
+          <span id="status-line" class="status"></span>
+        </div>
+      </section>
+
+      <section id="progress-card" class="card hidden">
+        <div class="progress-head">
+          <span id="progress-text">0 / 0</span>
+          <span id="progress-pct">0%</span>
+        </div>
+        <div class="bar"><div id="bar-fill" class="bar-fill"></div></div>
+        <p id="last-file" class="last-file"></p>
+      </section>
+
+      <section id="summary-card" class="card hidden">
+        <h2>Done</h2>
+        <ul class="summary">
+          <li><span class="lbl">Converted:</span> <span id="s-ok">0</span></li>
+          <li><span class="lbl">Skipped:</span> <span id="s-skip">0</span></li>
+          <li><span class="lbl">Failed:</span> <span id="s-fail">0</span></li>
+          <li><span class="lbl">Original size:</span> <span id="s-src">0 B</span></li>
+          <li><span class="lbl">WebP size:</span> <span id="s-dst">0 B</span></li>
+          <li class="emph"><span class="lbl">Saved:</span> <span id="s-saved">0 B (0%)</span></li>
+        </ul>
+        <details id="fail-details" class="hidden">
+          <summary>Failed files</summary>
+          <ul id="fail-list"></ul>
+        </details>
+      </section>
+    </main>
+
+    <script src="main.js"></script>
+  </body>
+</html>
