@@ -10,7 +10,7 @@
     <main>
       <header>
         <h1>WebP Converter</h1>
-        <p class="sub">Bulk-convert images to WebP. PNGs stay lossless to preserve transparency; everything else uses the quality slider.</p>
+        <p class="sub">Bulk-convert images to WebP. Pick a quality, a target file size, or a percentage of the original.</p>
       </header>
 
       <section class="card">
@@ -20,6 +20,7 @@
             <input id="input-dir" type="text" placeholder="Pick a folder containing your images…" readonly />
             <button id="pick-input" class="secondary">Browse…</button>
           </div>
+          <p id="scan-stats" class="hint"></p>
         </div>
 
         <div class="row">
@@ -30,17 +31,48 @@
           </div>
         </div>
 
-        <div class="row split">
-          <div>
-            <label for="quality">Quality <span id="quality-val">80</span></label>
-            <input id="quality" type="range" min="0" max="100" value="80" />
-            <p class="hint">80 is the sweet spot for web photos. PNGs ignore this and use lossless.</p>
+        <div class="row">
+          <label>Compression mode</label>
+          <div class="mode-tabs" role="tablist">
+            <button type="button" class="mode-tab active" data-mode="quality">Quality</button>
+            <button type="button" class="mode-tab" data-mode="target_size">Target size</button>
+            <button type="button" class="mode-tab" data-mode="percentage">Percentage</button>
           </div>
+        </div>
+
+        <div id="mode-quality" class="mode-panel">
+          <label for="quality">Quality <span id="quality-val">80</span></label>
+          <input id="quality" type="range" min="0" max="100" value="80" />
+          <p class="hint">80 is the sweet spot for web photos. PNGs use lossless when "Auto-lossless" is on.</p>
+        </div>
+
+        <div id="mode-target_size" class="mode-panel hidden">
+          <div class="size-grid">
+            <div>
+              <label for="size-max">Max size (KB)</label>
+              <input id="size-max" type="number" min="1" value="300" />
+            </div>
+            <div>
+              <label for="size-min">Min size (KB) <span class="opt">optional</span></label>
+              <input id="size-min" type="number" min="0" placeholder="—" />
+            </div>
+          </div>
+          <p class="hint">Files at or below the max stay near-original (quality 95). Files above the max are shrunk to fit. PNGs above the max get re-encoded lossy.</p>
+        </div>
+
+        <div id="mode-percentage" class="mode-panel hidden">
+          <label for="percent">Compress to <span id="percent-val">50</span>% of original</label>
+          <input id="percent" type="range" min="5" max="95" value="50" />
+          <p class="hint">Each file is targeted at this fraction of its current size. PNGs are re-encoded lossy.</p>
+        </div>
+
+        <div class="row split">
           <div>
             <label for="parallel">Parallel jobs</label>
             <input id="parallel" type="number" min="1" max="32" value="4" />
             <p class="hint">4 is safe; bump to 8 on a fast machine.</p>
           </div>
+          <div></div>
         </div>
 
         <div class="row toggles">
@@ -54,7 +86,7 @@
           </label>
           <label class="checkbox">
             <input id="lossless-png" type="checkbox" checked />
-            <span>Auto-lossless for PNG (recommended)</span>
+            <span>Auto-lossless for PNG (quality mode only)</span>
           </label>
         </div>
 

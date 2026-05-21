@@ -9,8 +9,17 @@ const els = {
   outputDir: $("output-dir"),
   pickInput: $("pick-input"),
   pickOutput: $("pick-output"),
+  scanStats: $("scan-stats"),
+  modeTabs: document.querySelectorAll(".mode-tab"),
+  modeQuality: $("mode-quality"),
+  modeTargetSize: $("mode-target_size"),
+  modePercentage: $("mode-percentage"),
   quality: $("quality"),
   qualityVal: $("quality-val"),
+  sizeMax: $("size-max"),
+  sizeMin: $("size-min"),
+  percent: $("percent"),
+  percentVal: $("percent-val"),
   parallel: $("parallel"),
   recursive: $("recursive"),
   skipExisting: $("skip-existing"),
@@ -32,6 +41,8 @@ const els = {
   failDetails: $("fail-details"),
   failList: $("fail-list"),
 };
+
+let currentMode = "quality";
 
 function humanBytes(b) {
   if (!Number.isFinite(b)) return "0 B";
@@ -56,8 +67,24 @@ function setStatus(msg, isError) {
   els.statusLine.classList.toggle("error", !!isError);
 }
 
+function setMode(mode) {
+  currentMode = mode;
+  els.modeTabs.forEach((t) => t.classList.toggle("active", t.dataset.mode === mode));
+  els.modeQuality.classList.toggle("hidden", mode !== "quality");
+  els.modeTargetSize.classList.toggle("hidden", mode !== "target_size");
+  els.modePercentage.classList.toggle("hidden", mode !== "percentage");
+}
+
+els.modeTabs.forEach((tab) => {
+  tab.addEventListener("click", () => setMode(tab.dataset.mode));
+});
+
 els.quality.addEventListener("input", () => {
   els.qualityVal.textContent = els.quality.value;
+});
+
+els.percent.addEventListener("input", () => {
+  els.percentVal.textContent = els.percent.value;
 });
 
 els.pickInput.addEventListener("click", async () => {
@@ -82,22 +109,72 @@ els.pickOutput.addEventListener("click", async () => {
 
 async function autoScan() {
   if (!els.inputDir.value) return;
+  els.scanStats.textContent = "Scanning…";
   try {
-    const n = await invoke("scan", {
+    const r = await invoke("scan", {
       inputDir: els.inputDir.value,
       recursive: els.recursive.checked,
     });
-    setStatus(n === 0 ? "No supported images found in this folder." : `Found ${n} image${n === 1 ? "" : "s"}.`);
+    if (r.count === 0) {
+      els.scanStats.textContent = "No supported images found in this folder.";
+      setStatus("");
+      return;
+    }
+    els.scanStats.textContent =
+      `${r.count} file${r.count === 1 ? "" : "s"} · ` +
+      `smallest ${humanBytes(r.min_bytes)} · ` +
+      `largest ${humanBytes(r.max_bytes)} · ` +
+      `median ${humanBytes(r.median_bytes)} · ` +
+      `total ${humanBytes(r.total_bytes)}`;
+    setStatus("");
   } catch (e) {
+    els.scanStats.textContent = "";
     setStatus(String(e), true);
   }
 }
 
 els.recursive.addEventListener("change", autoScan);
 
+function buildCompression() {
+  if (currentMode === "quality") {
+    return { mode: "quality", quality: parseInt(els.quality.value, 10) };
+  }
+  if (currentMode === "target_size") {
+    const maxKb = parseInt(els.sizeMax.value, 10);
+    const minRaw = els.sizeMin.value.trim();
+    const minKb = minRaw === "" ? null : parseInt(minRaw, 10);
+    if (!Number.isFinite(maxKb) || maxKb <= 0) {
+      throw new Error("Max size must be a positive number of KB.");
+    }
+    if (minKb !== null && (!Number.isFinite(minKb) || minKb < 0)) {
+      throw new Error("Min size must be a non-negative number of KB.");
+    }
+    if (minKb !== null && minKb >= maxKb) {
+      throw new Error("Min size must be less than max size.");
+    }
+    return {
+      mode: "target_size",
+      max_bytes: maxKb * 1024,
+      min_bytes: minKb === null ? null : minKb * 1024,
+    };
+  }
+  if (currentMode === "percentage") {
+    return { mode: "percentage", percent: parseInt(els.percent.value, 10) };
+  }
+  throw new Error(`Unknown mode: ${currentMode}`);
+}
+
 let unlistenProgress = null;
 
 els.convertBtn.addEventListener("click", async () => {
+  let compression;
+  try {
+    compression = buildCompression();
+  } catch (e) {
+    setStatus(e.message, true);
+    return;
+  }
+
   els.convertBtn.disabled = true;
   els.pickInput.disabled = true;
   els.pickOutput.disabled = true;
@@ -117,8 +194,12 @@ els.convertBtn.addEventListener("click", async () => {
     els.progressPct.textContent = `${pct}%`;
     els.barFill.style.width = `${pct}%`;
     if (last) {
-      const tag = last.status === "ok" ? "✓" : last.status === "skip" ? "↷" : "✗";
-      els.lastFile.textContent = `${tag} ${basename(last.source)}`;
+      let tag = "✓";
+      if (last.status === "skip") tag = "↷";
+      else if (last.status === "fail") tag = "✗";
+      else if (last.action === "preserved") tag = "✓";
+      const note = last.action === "preserved" ? " (preserved)" : "";
+      els.lastFile.textContent = `${tag} ${basename(last.source)}${note}`;
     }
   });
 
@@ -127,7 +208,7 @@ els.convertBtn.addEventListener("click", async () => {
       options: {
         input_dir: els.inputDir.value,
         output_dir: els.outputDir.value,
-        quality: parseInt(els.quality.value, 10),
+        compression,
         parallel: parseInt(els.parallel.value, 10),
         recursive: els.recursive.checked,
         skip_existing: els.skipExisting.checked,

@@ -9,12 +9,24 @@ use tokio::sync::Semaphore;
 use walkdir::WalkDir;
 
 const SUPPORTED_EXTS: &[&str] = &["jpg", "jpeg", "png", "tif", "tiff", "bmp"];
+const PRESERVE_QUALITY: u8 = 95;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum CompressionMode {
+    Quality { quality: u8 },
+    TargetSize {
+        max_bytes: u64,
+        min_bytes: Option<u64>,
+    },
+    Percentage { percent: u8 },
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConvertOptions {
     pub input_dir: String,
     pub output_dir: String,
-    pub quality: u8,
+    pub compression: CompressionMode,
     pub parallel: usize,
     pub recursive: bool,
     pub skip_existing: bool,
@@ -27,6 +39,7 @@ pub struct FileResult {
     pub source: String,
     pub source_size: u64,
     pub dest_size: u64,
+    pub action: String, // "compressed" | "preserved" | "skipped" | "failed"
     pub error: Option<String>,
 }
 
@@ -39,6 +52,15 @@ pub struct ConvertSummary {
     pub source_total_bytes: u64,
     pub dest_total_bytes: u64,
     pub failed_files: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ScanResult {
+    pub count: usize,
+    pub min_bytes: u64,
+    pub max_bytes: u64,
+    pub median_bytes: u64,
+    pub total_bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -78,12 +100,63 @@ fn collect_images(input: &Path, recursive: bool) -> Vec<PathBuf> {
         .collect()
 }
 
+fn build_cwebp_args(
+    src: &Path,
+    src_size: u64,
+    dst: &Path,
+    mode: &CompressionMode,
+    force_lossless_png: bool,
+) -> (Vec<String>, String) {
+    let src_str = src.display().to_string();
+    let dst_str = dst.display().to_string();
+    let png = is_png(src);
+
+    let mut args: Vec<String> = vec!["-quiet".into()];
+    let mut action = "compressed".to_string();
+
+    match mode {
+        CompressionMode::Quality { quality } => {
+            if force_lossless_png && png {
+                args.push("-lossless".into());
+            }
+            args.push("-q".into());
+            args.push(quality.to_string());
+        }
+        CompressionMode::TargetSize { max_bytes, .. } => {
+            if src_size <= *max_bytes {
+                // Already in range — preserve without aggressive shrinking
+                if force_lossless_png && png {
+                    args.push("-lossless".into());
+                }
+                args.push("-q".into());
+                args.push(PRESERVE_QUALITY.to_string());
+                action = "preserved".into();
+            } else {
+                // Aggressively shrink to fit. -size doesn't work with -lossless.
+                args.push("-size".into());
+                args.push(max_bytes.to_string());
+            }
+        }
+        CompressionMode::Percentage { percent } => {
+            let pct = (*percent).clamp(1, 99) as f64;
+            let target = ((src_size as f64) * pct / 100.0).max(1.0) as u64;
+            args.push("-size".into());
+            args.push(target.to_string());
+        }
+    }
+
+    args.push(src_str);
+    args.push("-o".into());
+    args.push(dst_str);
+    (args, action)
+}
+
 async fn convert_one(
     app: AppHandle,
     src: PathBuf,
     input_root: PathBuf,
     output_root: PathBuf,
-    quality: u8,
+    mode: CompressionMode,
     skip_existing: bool,
     force_lossless_png: bool,
 ) -> FileResult {
@@ -98,35 +171,27 @@ async fn convert_one(
                 source: src.display().to_string(),
                 source_size: 0,
                 dest_size: 0,
+                action: "failed".into(),
                 error: Some(format!("mkdir failed: {e}")),
             };
         }
     }
 
+    let src_size = std::fs::metadata(&src).map(|m| m.len()).unwrap_or(0);
+    let src_str = src.display().to_string();
+
     if skip_existing && dst.exists() {
         return FileResult {
             status: "skip".into(),
-            source: src.display().to_string(),
-            source_size: 0,
+            source: src_str,
+            source_size: src_size,
             dest_size: 0,
+            action: "skipped".into(),
             error: None,
         };
     }
 
-    let use_lossless = force_lossless_png && is_png(&src);
-    let q = quality.to_string();
-    let src_str = src.display().to_string();
-    let dst_str = dst.display().to_string();
-
-    let mut args: Vec<String> = vec!["-quiet".into()];
-    if use_lossless {
-        args.push("-lossless".into());
-    }
-    args.push("-q".into());
-    args.push(q);
-    args.push(src_str.clone());
-    args.push("-o".into());
-    args.push(dst_str.clone());
+    let (args, action) = build_cwebp_args(&src, src_size, &dst, &mode, force_lossless_png);
 
     let sidecar = match app.shell().sidecar("cwebp") {
         Ok(c) => c,
@@ -134,8 +199,9 @@ async fn convert_one(
             return FileResult {
                 status: "fail".into(),
                 source: src_str,
-                source_size: 0,
+                source_size: src_size,
                 dest_size: 0,
+                action: "failed".into(),
                 error: Some(format!("sidecar resolve failed: {e}")),
             };
         }
@@ -145,13 +211,13 @@ async fn convert_one(
 
     match output {
         Ok(out) if out.status.success() => {
-            let source_size = std::fs::metadata(&src).map(|m| m.len()).unwrap_or(0);
             let dest_size = std::fs::metadata(&dst).map(|m| m.len()).unwrap_or(0);
             FileResult {
                 status: "ok".into(),
                 source: src_str,
-                source_size,
+                source_size: src_size,
                 dest_size,
+                action,
                 error: None,
             }
         }
@@ -160,8 +226,9 @@ async fn convert_one(
             FileResult {
                 status: "fail".into(),
                 source: src_str,
-                source_size: 0,
+                source_size: src_size,
                 dest_size: 0,
+                action: "failed".into(),
                 error: Some(if stderr.is_empty() {
                     format!("cwebp exited with status {:?}", out.status.code())
                 } else {
@@ -172,20 +239,40 @@ async fn convert_one(
         Err(e) => FileResult {
             status: "fail".into(),
             source: src_str,
-            source_size: 0,
+            source_size: src_size,
             dest_size: 0,
+            action: "failed".into(),
             error: Some(format!("spawn failed: {e}")),
         },
     }
 }
 
 #[tauri::command]
-async fn scan(input_dir: String, recursive: bool) -> Result<usize, String> {
+async fn scan(input_dir: String, recursive: bool) -> Result<ScanResult, String> {
     let p = PathBuf::from(&input_dir);
     if !p.is_dir() {
         return Err(format!("Not a directory: {input_dir}"));
     }
-    Ok(collect_images(&p, recursive).len())
+    let paths = collect_images(&p, recursive);
+    let mut sizes: Vec<u64> = paths
+        .iter()
+        .filter_map(|p| std::fs::metadata(p).ok().map(|m| m.len()))
+        .collect();
+    sizes.sort_unstable();
+    let count = sizes.len();
+    let total_bytes: u64 = sizes.iter().sum();
+    let (min_bytes, max_bytes, median_bytes) = if count == 0 {
+        (0, 0, 0)
+    } else {
+        (sizes[0], sizes[count - 1], sizes[count / 2])
+    };
+    Ok(ScanResult {
+        count,
+        min_bytes,
+        max_bytes,
+        median_bytes,
+        total_bytes,
+    })
 }
 
 #[tauri::command]
@@ -224,7 +311,7 @@ async fn convert(app: AppHandle, options: ConvertOptions) -> Result<ConvertSumma
         let done_c = done.clone();
         let input_root_c = input_root.clone();
         let output_root_c = output_root.clone();
-        let quality = options.quality;
+        let mode = options.compression.clone();
         let skip_existing = options.skip_existing;
         let force_lossless_png = options.force_lossless_png;
 
@@ -235,7 +322,7 @@ async fn convert(app: AppHandle, options: ConvertOptions) -> Result<ConvertSumma
                 src,
                 input_root_c,
                 output_root_c,
-                quality,
+                mode,
                 skip_existing,
                 force_lossless_png,
             )
